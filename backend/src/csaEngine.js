@@ -1,58 +1,202 @@
+const { performance } = require('perf_hooks');
 const { minsToTimeStr } = require('./routesLoader');
 
-function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+const WALK_SPEED_METERS_PER_MINUTE = 80;
+
+const MAX_ACCESS_WALK_METERS = 1500;
+const MAX_TRANSFER_WALK_METERS = 500;
+
+const DEFAULT_FREQUENCY_MINUTES = 15;
+const DEFAULT_DEPARTURE_TIME = '00:00';
+
+const MINUTES_PER_STOP = 3;
+
+const FINAL_WALK_IMPROVEMENT_METERS = 200;
+
+function calculateDistanceMeters(
+  lat1,
+  lon1,
+  lat2,
+  lon2
+) {
   const R = 6371e3;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const dLat =
+    (lat2 - lat1) * Math.PI / 180;
+
+  const dLon =
+    (lon2 - lon1) * Math.PI / 180;
 
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLat / 2) *
+      Math.sin(dLat / 2) +
     Math.cos(lat1 * Math.PI / 180) *
       Math.cos(lat2 * Math.PI / 180) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
 
-  const boundedA = Math.min(1, Math.max(0, a));
+  const boundedA =
+    Math.min(
+      1,
+      Math.max(0, a)
+    );
 
-  const c = 2 * Math.atan2(
-    Math.sqrt(boundedA),
-    Math.sqrt(1 - boundedA)
-  );
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(boundedA),
+      Math.sqrt(1 - boundedA)
+    );
 
   return Math.round(R * c);
+}
+
+function walkMinutes(distanceMeters) {
+  return Math.max(
+    1,
+    Math.ceil(
+      distanceMeters /
+      WALK_SPEED_METERS_PER_MINUTE
+    )
+  );
+}
+
+function timeStrToMinutes(value) {
+  if (
+    typeof value === 'number' &&
+    Number.isFinite(value)
+  ) {
+    return value;
+  }
+
+  if (
+    typeof value !== 'string' ||
+    !value.includes(':')
+  ) {
+    return 0;
+  }
+
+  const [hours, minutes] =
+    value
+      .split(':')
+      .map(Number);
+
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(minutes)
+  ) {
+    return 0;
+  }
+
+  return (
+    hours * 60 +
+    minutes
+  );
+}
+
+function getRouteStart(route) {
+  if (
+    Number.isFinite(
+      route.startMins
+    )
+  ) {
+    return route.startMins;
+  }
+
+  if (route.startTime) {
+    return timeStrToMinutes(
+      route.startTime
+    );
+  }
+
+  return 360;
+}
+
+function getRouteEnd(route) {
+  if (
+    Number.isFinite(
+      route.endMins
+    )
+  ) {
+    return route.endMins;
+  }
+
+  if (route.endTime) {
+    return timeStrToMinutes(
+      route.endTime
+    );
+  }
+
+  return 1260;
+}
+
+function getRouteFrequency(route) {
+  const values = [
+    route.frequencyMins,
+    route.frequency,
+    route.headway,
+    route.headwayMins
+  ];
+
+  for (const value of values) {
+    const parsed =
+      Number(value);
+
+    if (
+      Number.isFinite(parsed) &&
+      parsed > 0
+    ) {
+      return parsed;
+    }
+  }
+
+  return DEFAULT_FREQUENCY_MINUTES;
 }
 
 function findNearbyStops(
   lat,
   lng,
   stopsMap,
-  maxDistMeters = 1500
+  maxDistanceMeters =
+    MAX_ACCESS_WALK_METERS
 ) {
   const nearby = [];
 
-  for (const [id, stop] of stopsMap.entries()) {
-    const distanceMeters = calculateDistanceMeters(
-      lat,
-      lng,
-      stop.lat,
-      stop.lng
-    );
+  for (
+    const [id, stop]
+    of stopsMap.entries()
+  ) {
+    const distanceMeters =
+      calculateDistanceMeters(
+        lat,
+        lng,
+        stop.lat,
+        stop.lng
+      );
 
-    if (distanceMeters <= maxDistMeters) {
+    if (
+      distanceMeters <=
+      maxDistanceMeters
+    ) {
       nearby.push({
         ...stop,
+
+        id,
+
         distanceMeters,
-        walkTimeMins: Math.max(
-          1,
-          Math.ceil(distanceMeters / 80)
-        )
+
+        walkTimeMins:
+          walkMinutes(
+            distanceMeters
+          )
       });
     }
   }
 
   return nearby.sort(
     (a, b) =>
-      a.distanceMeters - b.distanceMeters
+      a.distanceMeters -
+      b.distanceMeters
   );
 }
 
@@ -60,75 +204,146 @@ function buildConnections(routes) {
   const connections = [];
 
   for (const route of routes) {
-    if (!route.stops || route.stops.length < 2) {
+    if (
+      !Array.isArray(route.stops) ||
+      route.stops.length < 2
+    ) {
       continue;
     }
 
-    for (let i = 0; i < route.stops.length - 1; i++) {
-      const depStop = route.stops[i];
-      const arrStop = route.stops[i + 1];
+    const startMins =
+      getRouteStart(route);
 
-      connections.push({
-        depStopId: depStop.id,
-        arrStopId: arrStop.id,
-        duration: 3,
-        routeId: route.id,
-        routeName: route.name,
-        routeColor: route.color || '#ff8300',
-        route,
-        fromIndex: i,
-        toIndex: i + 1
-      });
+    const endMins =
+      getRouteEnd(route);
+
+    const frequencyMins =
+      getRouteFrequency(route);
+
+    for (
+      let tripStart =
+        startMins;
+
+      tripStart <= endMins;
+
+      tripStart +=
+        frequencyMins
+    ) {
+      const tripId =
+        `${route.id}_${tripStart}`;
+
+      for (
+        let i = 0;
+        i < route.stops.length - 1;
+        i++
+      ) {
+        const depStop =
+          route.stops[i];
+
+        const arrStop =
+          route.stops[i + 1];
+
+        const depTime =
+          tripStart +
+          i * MINUTES_PER_STOP;
+
+        const arrTime =
+          depTime +
+          MINUTES_PER_STOP;
+
+        connections.push({
+          depStopId:
+            depStop.id,
+
+          arrStopId:
+            arrStop.id,
+
+          depTime,
+
+          arrTime,
+
+          duration:
+            MINUTES_PER_STOP,
+
+          tripId,
+
+          routeId:
+            route.id,
+
+          routeName:
+            route.name,
+
+          routeColor:
+            route.color ||
+            '#ff8300',
+
+          route,
+
+          fromIndex: i,
+
+          toIndex: i + 1
+        });
+      }
     }
   }
+
+  connections.sort(
+    (a, b) => {
+      if (
+        a.depTime !==
+        b.depTime
+      ) {
+        return (
+          a.depTime -
+          b.depTime
+        );
+      }
+
+      return (
+        a.arrTime -
+        b.arrTime
+      );
+    }
+  );
 
   return connections;
 }
 
-function buildTransitAdjacency(connections) {
-  const adjacency = new Map();
+function buildFootpaths(
+  stopsMap,
+  maxDistanceMeters =
+    MAX_TRANSFER_WALK_METERS
+) {
+  const footpaths =
+    new Map();
 
-  for (const connection of connections) {
-    if (!adjacency.has(connection.depStopId)) {
-      adjacency.set(connection.depStopId, []);
-    }
+  const stops =
+    Array.from(
+      stopsMap.values()
+    );
 
-    adjacency.get(connection.depStopId).push({
-      type: 'TRANSIT',
-      toStopId: connection.arrStopId,
-      duration: connection.duration,
-      routeId: connection.routeId,
-      routeName: connection.routeName,
-      routeColor: connection.routeColor,
-      route: connection.route,
-      fromIndex: connection.fromIndex,
-      toIndex: connection.toIndex
-    });
+  for (const stop of stops) {
+    footpaths.set(
+      stop.id,
+      []
+    );
   }
 
-  return adjacency;
-}
+  for (
+    let i = 0;
+    i < stops.length;
+    i++
+  ) {
+    for (
+      let j = i + 1;
+      j < stops.length;
+      j++
+    ) {
+      const fromStop =
+        stops[i];
 
-function buildWalkingAdjacency(
-  stopsMap,
-  maxTransferDistanceMeters = 300
-) {
-  const adjacency = new Map();
-  const stops = Array.from(stopsMap.values());
-
-  for (let i = 0; i < stops.length; i++) {
-    const fromStop = stops[i];
-
-    if (!adjacency.has(fromStop.id)) {
-      adjacency.set(fromStop.id, []);
-    }
-
-    for (let j = 0; j < stops.length; j++) {
-      if (i === j) {
-        continue;
-      }
-
-      const toStop = stops[j];
+      const toStop =
+        stops[j];
 
       const distanceMeters =
         calculateDistanceMeters(
@@ -139,165 +354,214 @@ function buildWalkingAdjacency(
         );
 
       if (
-        distanceMeters <=
-        maxTransferDistanceMeters
+        distanceMeters >
+        maxDistanceMeters
       ) {
-        adjacency.get(fromStop.id).push({
-          type: 'WALK',
-          toStopId: toStop.id,
-          duration: Math.max(
-            1,
-            Math.ceil(distanceMeters / 80)
-          ),
+        continue;
+      }
+
+      const duration =
+        walkMinutes(
           distanceMeters
+        );
+
+      footpaths
+        .get(fromStop.id)
+        .push({
+          fromStopId:
+            fromStop.id,
+
+          toStopId:
+            toStop.id,
+
+          distanceMeters,
+
+          duration
         });
-      }
+
+      footpaths
+        .get(toStop.id)
+        .push({
+          fromStopId:
+            toStop.id,
+
+          toStopId:
+            fromStop.id,
+
+          distanceMeters,
+
+          duration
+        });
     }
   }
 
-  return adjacency;
+  return footpaths;
 }
 
-class MinHeap {
-  constructor() {
-    this.items = [];
-  }
-
-  push(item) {
-    this.items.push(item);
-    this.bubbleUp(this.items.length - 1);
-  }
-
-  pop() {
-    if (this.items.length === 0) {
-      return null;
-    }
-
-    if (this.items.length === 1) {
-      return this.items.pop();
-    }
-
-    const root = this.items[0];
-    this.items[0] = this.items.pop();
-    this.bubbleDown(0);
-
-    return root;
-  }
-
-  bubbleUp(index) {
-    let current = index;
-
-    while (current > 0) {
-      const parent = Math.floor((current - 1) / 2);
-
-      if (
-        this.items[parent].cost <=
-        this.items[current].cost
-      ) {
-        break;
-      }
-
-      [this.items[parent], this.items[current]] =
-        [this.items[current], this.items[parent]];
-
-      current = parent;
-    }
-  }
-
-  bubbleDown(index) {
-    let current = index;
-
-    while (true) {
-      const left = current * 2 + 1;
-      const right = current * 2 + 2;
-      let smallest = current;
-
-      if (
-        left < this.items.length &&
-        this.items[left].cost <
-          this.items[smallest].cost
-      ) {
-        smallest = left;
-      }
-
-      if (
-        right < this.items.length &&
-        this.items[right].cost <
-          this.items[smallest].cost
-      ) {
-        smallest = right;
-      }
-
-      if (smallest === current) {
-        break;
-      }
-
-      [this.items[current], this.items[smallest]] =
-        [this.items[smallest], this.items[current]];
-
-      current = smallest;
-    }
-  }
-
-  get size() {
-    return this.items.length;
-  }
-}
-
-function reconstructPath(
-  predecessor,
-  destinationStopId
+function findFirstConnectionIndex(
+  connections,
+  departureTime
 ) {
-  const steps = [];
-  const visited = new Set();
+  let low = 0;
+  let high =
+    connections.length;
 
-  let currentStopId = destinationStopId;
+  while (low < high) {
+    const middle =
+      Math.floor(
+        (low + high) / 2
+      );
 
-  while (currentStopId) {
-    if (visited.has(currentStopId)) {
-      break;
+    if (
+      connections[middle]
+        .depTime <
+      departureTime
+    ) {
+      low =
+        middle + 1;
+    } else {
+      high =
+        middle;
     }
-
-    visited.add(currentStopId);
-
-    const step = predecessor.get(currentStopId);
-
-    if (!step) {
-      break;
-    }
-
-    steps.unshift(step);
-
-    if (step.type === 'ORIGIN_WALK') {
-      break;
-    }
-
-    currentStopId = step.fromStopId;
   }
 
-  return steps;
+  return low;
 }
 
-function mergeTransitSteps(steps) {
+function clonePath(path) {
+  return path.map(
+    step => ({
+      ...step
+    })
+  );
+}
+
+function addTransitToPath(
+  path,
+  connection
+) {
+  const result =
+    clonePath(path);
+
+  result.push({
+    type:
+      'TRANSIT_EDGE',
+
+    fromStopId:
+      connection.depStopId,
+
+    toStopId:
+      connection.arrStopId,
+
+    depTime:
+      connection.depTime,
+
+    arrTime:
+      connection.arrTime,
+
+    duration:
+      connection.duration,
+
+    tripId:
+      connection.tripId,
+
+    routeId:
+      connection.routeId,
+
+    routeName:
+      connection.routeName,
+
+    routeColor:
+      connection.routeColor,
+
+    route:
+      connection.route,
+
+    fromIndex:
+      connection.fromIndex,
+
+    toIndex:
+      connection.toIndex
+  });
+
+  return result;
+}
+
+function addWalkToPath(
+  path,
+  footpath
+) {
+  const result =
+    clonePath(path);
+
+  result.push({
+    type:
+      'TRANSFER_WALK',
+
+    fromStopId:
+      footpath.fromStopId,
+
+    toStopId:
+      footpath.toStopId,
+
+    duration:
+      footpath.duration,
+
+    distanceMeters:
+      footpath.distanceMeters
+  });
+
+  return result;
+}
+
+function pathHasTransit(path) {
+  return path.some(
+    step =>
+      step.type ===
+      'TRANSIT_EDGE'
+  );
+}
+
+function mergeTransitSteps(path) {
   const merged = [];
 
-  for (const step of steps) {
-    if (step.type !== 'TRANSIT') {
-      merged.push(step);
+  for (const step of path) {
+    if (
+      step.type !==
+      'TRANSIT_EDGE'
+    ) {
+      merged.push({
+        ...step
+      });
+
       continue;
     }
 
-    const previous = merged[merged.length - 1];
+    const previous =
+      merged[
+        merged.length - 1
+      ];
 
     if (
       previous &&
-      previous.type === 'TRANSIT' &&
-      previous.routeId === step.routeId &&
-      previous.toStopId === step.fromStopId
+      previous.type ===
+        'TRANSIT_EDGE' &&
+      previous.tripId ===
+        step.tripId &&
+      previous.toStopId ===
+        step.fromStopId
     ) {
-      previous.toStopId = step.toStopId;
-      previous.duration += step.duration;
-      previous.toIndex = step.toIndex;
+      previous.toStopId =
+        step.toStopId;
+
+      previous.arrTime =
+        step.arrTime;
+
+      previous.duration +=
+        step.duration;
+
+      previous.toIndex =
+        step.toIndex;
     } else {
       merged.push({
         ...step
@@ -308,328 +572,337 @@ function mergeTransitSteps(steps) {
   return merged;
 }
 
-function runCSA({
-  origin,
-  destination,
-  routes,
-  stopsMap
-}) {
-  console.log('CSA NETWORK ROUTING IS RUNNING');
-
-  const originStops =
-    findNearbyStops(
-      origin.lat,
-      origin.lng,
-      stopsMap,
-      1500
-    );
-
-  const destinationStops =
-    findNearbyStops(
-      destination.lat,
-      destination.lng,
-      stopsMap,
-      1500
-    );
+function calculateTransfers(
+  path
+) {
+  const transitLegs =
+    mergeTransitSteps(path)
+      .filter(
+        step =>
+          step.type ===
+          'TRANSIT_EDGE'
+      );
 
   if (
-    originStops.length === 0 ||
-    destinationStops.length === 0
+    transitLegs.length === 0
   ) {
-    return {
-      options: []
-    };
+    return 0;
   }
 
-  const destinationMap =
-    new Map(
-      destinationStops.map(stop => [
-        stop.id,
-        stop
-      ])
-    );
+  return Math.max(
+    0,
+    transitLegs.length - 1
+  );
+}
 
-  const connections =
-    buildConnections(routes);
+function calculateWalkingDistance(
+  path,
+  destinationStop
+) {
+  let total = 0;
 
-  const transitAdjacency =
-    buildTransitAdjacency(connections);
-
-  const walkingAdjacency =
-    buildWalkingAdjacency(
-      stopsMap,
-      300
-    );
-
-  const bestCost = new Map();
-  const predecessor = new Map();
-  const queue = new MinHeap();
-
-  for (const stopId of stopsMap.keys()) {
-    bestCost.set(stopId, Infinity);
-  }
-
-  for (const stop of originStops) {
-    const cost =
-      stop.walkTimeMins;
-
+  for (const step of path) {
     if (
-      cost <
-      (bestCost.get(stop.id) ?? Infinity)
+      step.type ===
+        'ORIGIN_WALK' ||
+      step.type ===
+        'TRANSFER_WALK'
     ) {
-      bestCost.set(
-        stop.id,
-        cost
-      );
-
-      predecessor.set(
-        stop.id,
-        {
-          type: 'ORIGIN_WALK',
-          fromStopId: null,
-          toStopId: stop.id,
-          duration: stop.walkTimeMins,
-          distanceMeters: stop.distanceMeters
-        }
-      );
-
-      queue.push({
-        stopId: stop.id,
-        cost
-      });
+      total +=
+        step.distanceMeters ||
+        0;
     }
   }
 
-  let bestDestinationCost =
-    Infinity;
+  if (destinationStop) {
+    total +=
+      destinationStop
+        .distanceMeters ||
+      0;
+  }
 
-  let bestDestinationStopId =
-    null;
+  return Math.round(total);
+}
 
-  while (queue.size > 0) {
-    const current =
-      queue.pop();
+function relaxFootpaths({
+  sourceStopId,
+  sourceArrivalTime,
+  earliestArrival,
+  paths,
+  footpaths,
+  metrics
+}) {
+  const outgoing =
+    footpaths.get(
+      sourceStopId
+    ) || [];
 
-    if (!current) {
-      break;
-    }
+  for (
+    const footpath
+    of outgoing
+  ) {
+    metrics
+      .footpathsChecked++;
 
-    const currentBest =
-      bestCost.get(current.stopId);
+    const candidateArrival =
+      sourceArrivalTime +
+      footpath.duration;
+
+    const currentArrival =
+      earliestArrival.get(
+        footpath.toStopId
+      ) ?? Infinity;
 
     if (
-      current.cost !==
-      currentBest
+      candidateArrival >=
+      currentArrival
     ) {
       continue;
     }
 
+    earliestArrival.set(
+      footpath.toStopId,
+      candidateArrival
+    );
+
+    const sourcePath =
+      paths.get(
+        sourceStopId
+      ) || [];
+
+    paths.set(
+      footpath.toStopId,
+      addWalkToPath(
+        sourcePath,
+        footpath
+      )
+    );
+
+    metrics.stopsUpdated++;
+
+    metrics
+      .footpathsRelaxed++;
+  }
+}
+
+function isBetterDestinationCandidate({
+  candidateStop,
+  candidateArrival,
+  candidatePath,
+  currentStop,
+  currentArrival,
+  currentPath
+}) {
+  if (!currentStop) {
+    return true;
+  }
+
+  const candidateWalk =
+    candidateStop.distanceMeters;
+
+  const currentWalk =
+    currentStop.distanceMeters;
+
+  const candidateTransfers =
+    calculateTransfers(
+      candidatePath
+    );
+
+  const currentTransfers =
+    calculateTransfers(
+      currentPath
+    );
+
+  const walkImprovement =
+    currentWalk -
+    candidateWalk;
+
+  if (
+    walkImprovement >=
+    FINAL_WALK_IMPROVEMENT_METERS
+  ) {
+    return true;
+  }
+
+  if (
+    candidateWalk <=
+      currentWalk +
+      FINAL_WALK_IMPROVEMENT_METERS &&
+    candidateArrival <
+      currentArrival
+  ) {
+    return true;
+  }
+
+  if (
+    Math.abs(
+      candidateArrival -
+      currentArrival
+    ) <= 3 &&
+    candidateWalk <
+      currentWalk
+  ) {
+    return true;
+  }
+
+  if (
+    candidateArrival ===
+      currentArrival &&
+    candidateWalk ===
+      currentWalk &&
+    candidateTransfers <
+      currentTransfers
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function evaluateDestination({
+  destinationStops,
+  earliestArrival,
+  paths,
+  bestDestinationArrival,
+  bestDestinationStop,
+  bestDestinationPath,
+  metrics
+}) {
+  let bestArrival =
+    bestDestinationArrival;
+
+  let bestStop =
+    bestDestinationStop;
+
+  let bestPath =
+    bestDestinationPath;
+
+  for (
+    const destinationStop
+    of destinationStops
+  ) {
+    const stopArrival =
+      earliestArrival.get(
+        destinationStop.id
+      ) ?? Infinity;
+
     if (
-      current.cost >=
-      bestDestinationCost
+      stopArrival ===
+      Infinity
     ) {
       continue;
     }
 
+    const destinationPath =
+      paths.get(
+        destinationStop.id
+      ) || [];
+
     if (
-      destinationMap.has(
-        current.stopId
+      !pathHasTransit(
+        destinationPath
       )
     ) {
-      const destinationStop =
-        destinationMap.get(
-          current.stopId
-        );
-
-      const totalCost =
-        current.cost +
-        destinationStop.walkTimeMins;
-
-      if (
-        totalCost <
-        bestDestinationCost
-      ) {
-        bestDestinationCost =
-          totalCost;
-
-        bestDestinationStopId =
-          current.stopId;
-      }
+      continue;
     }
 
-    const transitEdges =
-      transitAdjacency.get(
-        current.stopId
-      ) || [];
+    metrics
+      .destinationCandidatesEvaluated++;
 
-    for (const edge of transitEdges) {
-      const nextCost =
-        current.cost +
-        edge.duration;
+    const arrivalAtDestination =
+      stopArrival +
+      destinationStop
+        .walkTimeMins;
 
-      const oldCost =
-        bestCost.get(edge.toStopId) ??
-        Infinity;
+    if (
+      isBetterDestinationCandidate({
+        candidateStop:
+          destinationStop,
 
-      if (nextCost < oldCost) {
-        bestCost.set(
-          edge.toStopId,
-          nextCost
+        candidateArrival:
+          arrivalAtDestination,
+
+        candidatePath:
+          destinationPath,
+
+        currentStop:
+          bestStop,
+
+        currentArrival:
+          bestArrival,
+
+        currentPath:
+          bestPath || []
+      })
+    ) {
+      bestArrival =
+        arrivalAtDestination;
+
+      bestStop =
+        destinationStop;
+
+      bestPath =
+        clonePath(
+          destinationPath
         );
-
-        predecessor.set(
-          edge.toStopId,
-          {
-            type: 'TRANSIT',
-            fromStopId:
-              current.stopId,
-            toStopId:
-              edge.toStopId,
-            duration:
-              edge.duration,
-            routeId:
-              edge.routeId,
-            routeName:
-              edge.routeName,
-            routeColor:
-              edge.routeColor,
-            route:
-              edge.route,
-            fromIndex:
-              edge.fromIndex,
-            toIndex:
-              edge.toIndex
-          }
-        );
-
-        queue.push({
-          stopId:
-            edge.toStopId,
-          cost:
-            nextCost
-        });
-      }
-    }
-
-    const walkingEdges =
-      walkingAdjacency.get(
-        current.stopId
-      ) || [];
-
-    for (const edge of walkingEdges) {
-      const nextCost =
-        current.cost +
-        edge.duration;
-
-      const oldCost =
-        bestCost.get(edge.toStopId) ??
-        Infinity;
-
-      if (nextCost < oldCost) {
-        bestCost.set(
-          edge.toStopId,
-          nextCost
-        );
-
-        predecessor.set(
-          edge.toStopId,
-          {
-            type: 'TRANSFER_WALK',
-            fromStopId:
-              current.stopId,
-            toStopId:
-              edge.toStopId,
-            duration:
-              edge.duration,
-            distanceMeters:
-              edge.distanceMeters
-          }
-        );
-
-        queue.push({
-          stopId:
-            edge.toStopId,
-          cost:
-            nextCost
-        });
-      }
     }
   }
 
-  if (
-    bestDestinationStopId === null ||
-    bestDestinationCost === Infinity
-  ) {
-    console.log(
-      'No network journey found.'
-    );
+  return {
+    bestDestinationArrival:
+      bestArrival,
 
-    return {
-      options: []
-    };
-  }
+    bestDestinationStop:
+      bestStop,
 
-  const rawSteps =
-    reconstructPath(
-      predecessor,
-      bestDestinationStopId
-    );
+    bestDestinationPath:
+      bestPath
+  };
+}
 
-  const steps =
-    mergeTransitSteps(
-      rawSteps
-    );
-
-  const transitSteps =
-    steps.filter(
-      step =>
-        step.type === 'TRANSIT'
-    );
-
-  if (
-    transitSteps.length === 0
-  ) {
-    return {
-      options: []
-    };
-  }
+function buildLegs({
+  path,
+  origin,
+  destination,
+  destinationStop,
+  stopsMap
+}) {
+  const merged =
+    mergeTransitSteps(path);
 
   const legs = [];
 
-  const originStep =
-    steps.find(
-      step =>
-        step.type ===
-        'ORIGIN_WALK'
-    );
-
-  if (originStep) {
-    const firstStop =
-      stopsMap.get(
-        originStep.toStopId
-      );
-
-    if (firstStop) {
-      legs.push({
-        type: 'WALK',
-        from:
-          origin.label ||
-          'Starting Location',
-        to:
-          firstStop.name,
-        duration:
-          originStep.duration,
-        dist:
-          originStep.distanceMeters
-      });
-    }
-  }
-
-  for (const step of steps) {
+  for (const step of merged) {
     if (
       step.type ===
       'ORIGIN_WALK'
     ) {
+      const stop =
+        stopsMap.get(
+          step.toStopId
+        );
+
+      if (!stop) {
+        continue;
+      }
+
+      legs.push({
+        type: 'WALK',
+
+        from:
+          origin.label ||
+          'Starting Location',
+
+        to:
+          stop.name,
+
+        duration:
+          step.duration,
+
+        dist:
+          step.distanceMeters
+      });
+
       continue;
     }
 
@@ -648,28 +921,34 @@ function runCSA({
         );
 
       if (
-        fromStop &&
-        toStop
+        !fromStop ||
+        !toStop
       ) {
-        legs.push({
-          type: 'WALK',
-          from:
-            fromStop.name,
-          to:
-            toStop.name,
-          duration:
-            step.duration,
-          dist:
-            step.distanceMeters
-        });
+        continue;
       }
+
+      legs.push({
+        type: 'WALK',
+
+        from:
+          fromStop.name,
+
+        to:
+          toStop.name,
+
+        duration:
+          step.duration,
+
+        dist:
+          step.distanceMeters
+      });
 
       continue;
     }
 
     if (
       step.type ===
-      'TRANSIT'
+      'TRANSIT_EDGE'
     ) {
       const fromStop =
         stopsMap.get(
@@ -689,7 +968,8 @@ function runCSA({
       }
 
       const routeStops =
-        step.route?.stops || [];
+        step.route?.stops ||
+        [];
 
       const segmentStops =
         routeStops.slice(
@@ -698,84 +978,618 @@ function runCSA({
         );
 
       legs.push({
-        type: 'TRANSIT',
+        type:
+          'TRANSIT',
+
         routeNumber:
           step.routeId,
+
         routeName:
           step.routeName,
+
         color:
           step.routeColor,
+
         fromStop:
           fromStop.name,
+
         toStop:
           toStop.name,
+
+        departureTime:
+          minsToTimeStr(
+            step.depTime
+          ),
+
+        arrivalTime:
+          minsToTimeStr(
+            step.arrTime
+          ),
+
         duration:
           step.duration,
+
         stops:
           segmentStops,
+
         pathPoints:
-          step.route?.allPathPoints ||
+          step.route
+            ?.allPathPoints ||
           []
       });
     }
   }
 
-  const destinationStop =
-    destinationMap.get(
-      bestDestinationStopId
-    );
-
-  const finalStop =
-    stopsMap.get(
-      bestDestinationStopId
-    );
-
-  if (
-    destinationStop &&
-    finalStop
-  ) {
-    legs.push({
-      type: 'WALK',
-      from:
-        finalStop.name,
-      to:
-        destination.label ||
-        'Destination Location',
-      duration:
-        destinationStop.walkTimeMins,
-      dist:
-        destinationStop.distanceMeters
-    });
-  }
-
-  const uniqueTransitRoutes = [];
-
-  for (const step of transitSteps) {
-    if (
-      uniqueTransitRoutes.length === 0 ||
-      uniqueTransitRoutes[
-        uniqueTransitRoutes.length - 1
-      ].routeId !== step.routeId
-    ) {
-      uniqueTransitRoutes.push(
-        step
+  if (destinationStop) {
+    const finalStop =
+      stopsMap.get(
+        destinationStop.id
       );
+
+    if (finalStop) {
+      legs.push({
+        type: 'WALK',
+
+        from:
+          finalStop.name,
+
+        to:
+          destination.label ||
+          'Destination Location',
+
+        duration:
+          destinationStop
+            .walkTimeMins,
+
+        dist:
+          destinationStop
+            .distanceMeters
+      });
     }
   }
 
+  return legs;
+}
+
+function runCSA({
+  origin,
+  destination,
+  departureTime,
+  routes,
+  stopsMap
+}) {
+  console.log(
+    'CANONICAL CSA ROUTING IS RUNNING'
+  );
+
+  const queryDepartureTime =
+    timeStrToMinutes(
+      departureTime ||
+      DEFAULT_DEPARTURE_TIME
+    );
+
+  const originStops =
+    findNearbyStops(
+      origin.lat,
+      origin.lng,
+      stopsMap,
+      MAX_ACCESS_WALK_METERS
+    );
+
+  const destinationStops =
+    findNearbyStops(
+      destination.lat,
+      destination.lng,
+      stopsMap,
+      MAX_ACCESS_WALK_METERS
+    );
+
+  console.log(
+    'Origin nearby stops:',
+    originStops.length
+  );
+
+  console.log(
+    'Destination nearby stops:',
+    destinationStops.length
+  );
+
+  if (
+    originStops.length === 0 ||
+    destinationStops.length === 0
+  ) {
+    return {
+      options: [],
+
+      metrics: {
+        algorithm: 'CSA',
+
+        executionTimeMs: 0,
+
+        preprocessingTimeMs: 0,
+
+        memoryDeltaBytes: 0,
+
+        connectionsScanned: 0,
+
+        stopsUpdated: 0,
+
+        footpathsChecked: 0,
+
+        footpathsRelaxed: 0,
+
+        destinationCandidatesEvaluated:
+          0,
+
+        simulatedTravelTime:
+          null,
+
+        transfers: null,
+
+        walkingDistanceMeters:
+          null
+      }
+    };
+  }
+
+  const preprocessingStart =
+    performance.now();
+
+  const connections =
+    buildConnections(routes);
+
+  const footpaths =
+    buildFootpaths(
+      stopsMap,
+      MAX_TRANSFER_WALK_METERS
+    );
+
+  const preprocessingEnd =
+    performance.now();
+
+  console.log(
+    'Connections built:',
+    connections.length
+  );
+
+  console.log(
+    'Routes loaded:',
+    routes.length
+  );
+
+  const earliestArrival =
+    new Map();
+
+  const paths =
+    new Map();
+
+  const reachedTrips =
+    new Map();
+
+  for (
+    const stopId
+    of stopsMap.keys()
+  ) {
+    earliestArrival.set(
+      stopId,
+      Infinity
+    );
+  }
+
+  const metrics = {
+    algorithm: 'CSA',
+
+    preprocessingTimeMs:
+      preprocessingEnd -
+      preprocessingStart,
+
+    executionTimeMs: 0,
+
+    memoryDeltaBytes: 0,
+
+    connectionsScanned: 0,
+
+    stopsUpdated: 0,
+
+    footpathsChecked: 0,
+
+    footpathsRelaxed: 0,
+
+    destinationCandidatesEvaluated:
+      0,
+
+    simulatedTravelTime:
+      null,
+
+    transfers: null,
+
+    walkingDistanceMeters:
+      null,
+
+    totalConnections:
+      connections.length,
+
+    departureTime:
+      minsToTimeStr(
+        queryDepartureTime
+      )
+  };
+
+  for (
+    const stop
+    of originStops
+  ) {
+    const arrivalTime =
+      queryDepartureTime +
+      stop.walkTimeMins;
+
+    const currentArrival =
+      earliestArrival.get(
+        stop.id
+      ) ?? Infinity;
+
+    if (
+      arrivalTime <
+      currentArrival
+    ) {
+      earliestArrival.set(
+        stop.id,
+        arrivalTime
+      );
+
+      paths.set(
+        stop.id,
+        [
+          {
+            type:
+              'ORIGIN_WALK',
+
+            fromStopId:
+              null,
+
+            toStopId:
+              stop.id,
+
+            duration:
+              stop.walkTimeMins,
+
+            distanceMeters:
+              stop.distanceMeters
+          }
+        ]
+      );
+
+      metrics
+        .stopsUpdated++;
+    }
+  }
+
+  const firstConnectionIndex =
+    findFirstConnectionIndex(
+      connections,
+      queryDepartureTime
+    );
+
+  let bestDestinationArrival =
+    Infinity;
+
+  let bestDestinationStop =
+    null;
+
+  let bestDestinationPath =
+    null;
+
+  const memoryBefore =
+    process
+      .memoryUsage()
+      .heapUsed;
+
+  const algorithmStart =
+    performance.now();
+
+  for (
+    let index =
+      firstConnectionIndex;
+
+    index <
+      connections.length;
+
+    index++
+  ) {
+    const connection =
+      connections[index];
+
+    metrics
+      .connectionsScanned++;
+
+    const arrivalAtDepartureStop =
+      earliestArrival.get(
+        connection.depStopId
+      ) ?? Infinity;
+
+    const tripState =
+      reachedTrips.get(
+        connection.tripId
+      );
+
+    const tripAlreadyReached =
+      Boolean(tripState);
+
+    const canBoardAtStop =
+      arrivalAtDepartureStop <=
+      connection.depTime;
+
+    if (
+      !tripAlreadyReached &&
+      !canBoardAtStop
+    ) {
+      continue;
+    }
+
+    let pathBeforeConnection;
+
+    if (
+      tripAlreadyReached
+    ) {
+      pathBeforeConnection =
+        tripState.path;
+    } else {
+      pathBeforeConnection =
+        paths.get(
+          connection.depStopId
+        ) || [];
+    }
+
+    const transitPath =
+      addTransitToPath(
+        pathBeforeConnection,
+        connection
+      );
+
+    reachedTrips.set(
+      connection.tripId,
+      {
+        path:
+          transitPath,
+
+        arrivalTime:
+          connection.arrTime,
+
+        lastStopId:
+          connection.arrStopId
+      }
+    );
+
+    const oldArrival =
+      earliestArrival.get(
+        connection.arrStopId
+      ) ?? Infinity;
+
+    if (
+      connection.arrTime <
+      oldArrival
+    ) {
+      earliestArrival.set(
+        connection.arrStopId,
+        connection.arrTime
+      );
+
+      paths.set(
+        connection.arrStopId,
+        transitPath
+      );
+
+      metrics
+        .stopsUpdated++;
+
+      relaxFootpaths({
+        sourceStopId:
+          connection.arrStopId,
+
+        sourceArrivalTime:
+          connection.arrTime,
+
+        earliestArrival,
+
+        paths,
+
+        footpaths,
+
+        metrics
+      });
+    }
+
+    const destinationResult =
+      evaluateDestination({
+        destinationStops,
+
+        earliestArrival,
+
+        paths,
+
+        bestDestinationArrival,
+
+        bestDestinationStop,
+
+        bestDestinationPath,
+
+        metrics
+      });
+
+    bestDestinationArrival =
+      destinationResult
+        .bestDestinationArrival;
+
+    bestDestinationStop =
+      destinationResult
+        .bestDestinationStop;
+
+    bestDestinationPath =
+      destinationResult
+        .bestDestinationPath;
+  }
+
+  const algorithmEnd =
+    performance.now();
+
+  const memoryAfter =
+    process
+      .memoryUsage()
+      .heapUsed;
+
+  metrics.executionTimeMs =
+    algorithmEnd -
+    algorithmStart;
+
+  metrics.memoryDeltaBytes =
+    memoryAfter -
+    memoryBefore;
+
+  console.log(
+    'Connections scanned:',
+    metrics
+      .connectionsScanned
+  );
+
+  console.log(
+    'Stops updated:',
+    metrics
+      .stopsUpdated
+  );
+
+  console.log(
+    'Footpaths relaxed:',
+    metrics
+      .footpathsRelaxed
+  );
+
+  console.log(
+    'Destination candidates:',
+    metrics
+      .destinationCandidatesEvaluated
+  );
+
+  if (
+    !bestDestinationStop ||
+    !bestDestinationPath ||
+    bestDestinationArrival ===
+      Infinity
+  ) {
+    console.log(
+      'No transit journey found.'
+    );
+
+    return {
+      options: [],
+      metrics
+    };
+  }
+
+  if (
+    !pathHasTransit(
+      bestDestinationPath
+    )
+  ) {
+    console.log(
+      'No valid bus journey found.'
+    );
+
+    return {
+      options: [],
+      metrics
+    };
+  }
+
+  const path =
+    bestDestinationPath;
+
+  const mergedTransitSteps =
+    mergeTransitSteps(path)
+      .filter(
+        step =>
+          step.type ===
+          'TRANSIT_EDGE'
+      );
+
+  if (
+    mergedTransitSteps.length ===
+    0
+  ) {
+    return {
+      options: [],
+      metrics
+    };
+  }
+
   const firstTransit =
-    uniqueTransitRoutes[0];
+    mergedTransitSteps[0];
 
   const lastTransit =
-    uniqueTransitRoutes[
-      uniqueTransitRoutes.length - 1
+    mergedTransitSteps[
+      mergedTransitSteps.length -
+      1
     ];
 
   const transfers =
-    Math.max(
-      0,
-      uniqueTransitRoutes.length - 1
+    calculateTransfers(path);
+
+  const walkingDistanceMeters =
+    calculateWalkingDistance(
+      path,
+      bestDestinationStop
     );
+
+  const simulatedTravelTime =
+    bestDestinationArrival -
+    queryDepartureTime;
+
+  metrics
+    .simulatedTravelTime =
+    simulatedTravelTime;
+
+  metrics.transfers =
+    transfers;
+
+  metrics
+    .walkingDistanceMeters =
+    walkingDistanceMeters;
+
+  metrics.arrivalTime =
+    minsToTimeStr(
+      bestDestinationArrival
+    );
+
+  metrics.finalWalkMeters =
+    bestDestinationStop
+      .distanceMeters;
+
+  metrics.routeSequence =
+    mergedTransitSteps.map(
+      step => ({
+        routeId:
+          step.routeId,
+
+        routeName:
+          step.routeName,
+
+        tripId:
+          step.tripId
+      })
+    );
+
+  const legs =
+    buildLegs({
+      path,
+
+      origin,
+
+      destination,
+
+      destinationStop:
+        bestDestinationStop,
+
+      stopsMap
+    });
 
   const primaryRoute =
     firstTransit.route;
@@ -791,60 +1605,84 @@ function runCSA({
       firstTransit.routeColor,
 
     totalDuration:
-      bestDestinationCost,
+      simulatedTravelTime,
 
-    isActiveNow:
-      true,
+    isActiveNow: true,
 
     operatingHours:
-      primaryRoute?.operatingHours ||
+      primaryRoute
+        ?.operatingHours ||
       (
-        primaryRoute?.startMins !== undefined &&
-        primaryRoute?.endMins !== undefined
+        primaryRoute
+          ?.startMins !==
+          undefined &&
+        primaryRoute
+          ?.endMins !==
+          undefined
           ? `${minsToTimeStr(
-              primaryRoute.startMins
+              primaryRoute
+                .startMins
             )} - ${minsToTimeStr(
-              primaryRoute.endMins
+              primaryRoute
+                .endMins
             )}`
-          : 'Schedule unavailable'
+          :
+          'Schedule unavailable'
       ),
 
     nextDepartureStr:
-      'Route available',
+      minsToTimeStr(
+        firstTransit.depTime
+      ),
 
     arrivalTimeStr:
-      `${bestDestinationCost} min travel time`,
+      minsToTimeStr(
+        bestDestinationArrival
+      ),
+
+    departureTimeStr:
+      minsToTimeStr(
+        queryDepartureTime
+      ),
 
     boardStopId:
-      firstTransit.fromStopId,
+      firstTransit
+        .fromStopId,
 
     alightStopId:
-      lastTransit.toStopId,
+      lastTransit
+        .toStopId,
 
     allRouteStops:
-      primaryRoute?.stops || [],
+      primaryRoute
+        ?.stops ||
+      [],
 
     allPathPoints:
-      primaryRoute?.allPathPoints || [],
+      primaryRoute
+        ?.allPathPoints ||
+      [],
 
     transfers,
 
+    walkingDistanceMeters,
+
+    finalWalkMeters:
+      bestDestinationStop
+        .distanceMeters,
+
+    simulatedTravelTime,
+
     routeSequence:
-      uniqueTransitRoutes.map(
-        step => ({
-          routeId:
-            step.routeId,
-          routeName:
-            step.routeName
-        })
-      ),
+      metrics.routeSequence,
 
     legs
   };
 
   console.log(
-    'Journey found:',
-    option.routeSequence
+    'CSA journey found:',
+    metrics
+      .routeSequence
       .map(
         route =>
           route.routeId
@@ -853,26 +1691,56 @@ function runCSA({
   );
 
   console.log(
+    'Simulated travel time:',
+    simulatedTravelTime,
+    'minutes'
+  );
+
+  console.log(
     'Transfers:',
     transfers
   );
 
   console.log(
-    'Estimated total duration:',
-    bestDestinationCost,
-    'minutes'
+    'Total walking distance:',
+    walkingDistanceMeters,
+    'meters'
+  );
+
+  console.log(
+    'Final walk:',
+    bestDestinationStop
+      .distanceMeters,
+    'meters'
+  );
+
+  console.log(
+    'CSA execution time:',
+    metrics
+      .executionTimeMs
+      .toFixed(4),
+    'ms'
   );
 
   return {
     options: [
       option
-    ]
+    ],
+
+    metrics
   };
 }
 
 module.exports = {
   calculateDistanceMeters,
+
   findNearbyStops,
+
   buildConnections,
+
+  buildFootpaths,
+
+  findFirstConnectionIndex,
+
   runCSA
 };

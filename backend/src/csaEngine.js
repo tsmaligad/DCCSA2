@@ -1,7 +1,7 @@
 const { performance } = require('perf_hooks');
 const { minsToTimeStr } = require('./routesLoader');
 
-const WALK_SPEED_METERS_PER_MINUTE = 80;
+const WALK_SPEED_METERS_PER_MINUTE = 45;
 
 const MAX_ACCESS_WALK_METERS = 1500;
 const MAX_TRANSFER_WALK_METERS = 500;
@@ -9,7 +9,7 @@ const MAX_TRANSFER_WALK_METERS = 500;
 const DEFAULT_FREQUENCY_MINUTES = 15;
 const DEFAULT_DEPARTURE_TIME = '00:00';
 
-const MINUTES_PER_STOP = 3;
+const MINUTES_PER_STOP = 7;
 
 const FINAL_WALK_IMPROVEMENT_METERS = 200;
 

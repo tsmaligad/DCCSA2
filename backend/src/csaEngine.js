@@ -229,8 +229,7 @@ function buildConnections(routes) {
       tripStart +=
         frequencyMins
     ) {
-      const tripId =
-        `${route.id}_${tripStart}`;
+      const tripId = `${route.variantId || route.fileName || route.id}_${tripStart}`;
 
       for (
         let i = 0;
@@ -685,6 +684,7 @@ function relaxFootpaths({
   }
 }
 
+
 function isBetterDestinationCandidate({
   candidateStop,
   candidateArrival,
@@ -693,71 +693,21 @@ function isBetterDestinationCandidate({
   currentArrival,
   currentPath
 }) {
-  if (!currentStop) {
-    return true;
-  }
+  if (!currentStop) return true;
 
-  const candidateWalk =
-    candidateStop.distanceMeters;
+  if (candidateArrival < currentArrival) return true;
+  if (candidateArrival > currentArrival) return false;
 
-  const currentWalk =
-    currentStop.distanceMeters;
+  const candidateTransfers = calculateTransfers(candidatePath);
+  const currentTransfers = calculateTransfers(currentPath || []);
 
-  const candidateTransfers =
-    calculateTransfers(
-      candidatePath
-    );
+  if (candidateTransfers < currentTransfers) return true;
+  if (candidateTransfers > currentTransfers) return false;
 
-  const currentTransfers =
-    calculateTransfers(
-      currentPath
-    );
-
-  const walkImprovement =
-    currentWalk -
-    candidateWalk;
-
-  if (
-    walkImprovement >=
-    FINAL_WALK_IMPROVEMENT_METERS
-  ) {
-    return true;
-  }
-
-  if (
-    candidateWalk <=
-      currentWalk +
-      FINAL_WALK_IMPROVEMENT_METERS &&
-    candidateArrival <
-      currentArrival
-  ) {
-    return true;
-  }
-
-  if (
-    Math.abs(
-      candidateArrival -
-      currentArrival
-    ) <= 3 &&
-    candidateWalk <
-      currentWalk
-  ) {
-    return true;
-  }
-
-  if (
-    candidateArrival ===
-      currentArrival &&
-    candidateWalk ===
-      currentWalk &&
-    candidateTransfers <
-      currentTransfers
-  ) {
-    return true;
-  }
-
-  return false;
+  return calculateWalkingDistance(candidatePath, candidateStop) <
+    calculateWalkingDistance(currentPath || [], currentStop);
 }
+
 
 function evaluateDestination({
   destinationStops,
@@ -1539,13 +1489,30 @@ function runCSA({
       bestDestinationStop
     );
 
+  const initialWalkMinutes =
+    path.find(
+      step =>
+        step.type === 'ORIGIN_WALK'
+    )?.duration || 0;
+
+  const journeyDepartureTime =
+    Math.max(
+      queryDepartureTime,
+      firstTransit.depTime - initialWalkMinutes
+    );
+
   const simulatedTravelTime =
     bestDestinationArrival -
-    queryDepartureTime;
+    journeyDepartureTime;
 
   metrics
     .simulatedTravelTime =
     simulatedTravelTime;
+
+  metrics.journeyDepartureTime =
+    minsToTimeStr(
+      journeyDepartureTime
+    );
 
   metrics.transfers =
     transfers;
@@ -1642,7 +1609,7 @@ function runCSA({
 
     departureTimeStr:
       minsToTimeStr(
-        queryDepartureTime
+        journeyDepartureTime
       ),
 
     boardStopId:
@@ -1688,6 +1655,20 @@ function runCSA({
           route.routeId
       )
       .join(' -> ')
+  );
+
+  console.log(
+    'Journey departure:',
+    minsToTimeStr(
+      journeyDepartureTime
+    )
+  );
+
+  console.log(
+    'Arrival:',
+    minsToTimeStr(
+      bestDestinationArrival
+    )
   );
 
   console.log(

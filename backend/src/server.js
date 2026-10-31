@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const { loadRoutesData, timeToMins } = require('./routesLoader');
@@ -10,7 +9,6 @@ app.use(express.json());
 
 const { routes, stopsMap } = loadRoutesData();
 
-// GET all routes for "All Bus Routes" tab (Deduplicated by route code)
 app.get('/api/routes', (req, res) => {
   const uniqueRoutesMap = new Map();
 
@@ -38,7 +36,6 @@ app.get('/api/routes', (req, res) => {
         color: r.color || '#2563eb',
         isActiveNow: r.isActiveNow !== undefined ? r.isActiveNow : true,
 
-        // Separate default schedules for AM and PM shifts
         startTimeAM: amVariant.startTime || amVariant.startTimeAM || '06:00',
         endTimeAM: amVariant.endTime || amVariant.endTimeAM || '10:00',
         startTimePM: pmVariant.startTime || pmVariant.startTimePM || '16:00',
@@ -56,7 +53,6 @@ app.get('/api/routes', (req, res) => {
   res.json(Array.from(uniqueRoutesMap.values()));
 });
 
-// GET route details by ID/code (supports ?direction=AM or ?direction=PM)
 app.get('/api/routes/:id', (req, res) => {
   const { id } = req.params;
   const { direction } = req.query;
@@ -69,7 +65,6 @@ app.get('/api/routes/:id', (req, res) => {
     return res.status(404).json({ error: 'Route not found' });
   }
 
-  // Find explicit directional variant if available
   let selectedRoute = matchingRoutes[0];
 
   const explicitMatch = matchingRoutes.find(r =>
@@ -92,7 +87,6 @@ app.get('/api/routes/:id', (req, res) => {
   res.json(responseData);
 });
 
-// POST nearby stops
 app.post('/api/nearby-stops', (req, res) => {
   const { lat, lng, radiusMeters } = req.body;
 
@@ -131,7 +125,6 @@ app.post('/api/nearby-stops', (req, res) => {
   res.json({ nearbyStops });
 });
 
-// POST plan trip with CSA performance measurements
 app.post('/api/plan-trip', (req, res) => {
   const { origin, destination, departureTime } = req.body;
 
@@ -152,22 +145,19 @@ app.post('/api/plan-trip', (req, res) => {
     ? timeToMins(departureTime)
     : 480;
 
-  // Capture memory usage before running CSA
   const memoryBefore = process.memoryUsage();
 
-  // Start timing CSA execution and CPU consumption
   const cpuBefore = process.cpuUsage();
   const start = performance.now();
 
   const result = runCSA({
     origin,
     destination,
-    departureTimeMins: currentMins,
+    departureTime: currentMins,
     routes,
     stopsMap
   });
 
-  // Stop measurements immediately after CSA finishes
   const end = performance.now();
   const cpuAfter = process.cpuUsage(cpuBefore);
   const memoryAfter = process.memoryUsage();
@@ -175,7 +165,6 @@ app.post('/api/plan-trip', (req, res) => {
   const executionTimeMs = end - start;
   const cpuTimeMs = (cpuAfter.user + cpuAfter.system) / 1000;
 
-  // Log CSA benchmark measurements in the backend terminal
   console.log('\n--- CSA Benchmark ---');
   console.log(`Execution time: ${executionTimeMs.toFixed(3)} ms`);
   console.log(`CPU time: ${cpuTimeMs.toFixed(3)} ms`);
@@ -194,7 +183,6 @@ app.post('/api/plan-trip', (req, res) => {
     `RSS after: ${(memoryAfter.rss / 1024 / 1024).toFixed(2)} MB`
   );
 
-  // Return the original CSA result to the frontend
   res.json(result);
 });
 

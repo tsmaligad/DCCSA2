@@ -89,10 +89,13 @@ function loadRoutesData() {
         color: data.color || '#ff8300',
         startMins,
         endMins,
+        variantId: String(data.id || file.replace('.json', '')),
+fileName: file,
         operatingHours: `${minsToTimeStr(startMins)} - ${minsToTimeStr(endMins)}`,
         stops,
         allPathPoints,
         trips
+        
       });
     } catch (err) {
       console.error(`Error reading ${file}:`, err.message);

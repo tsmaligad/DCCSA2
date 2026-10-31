@@ -2335,20 +2335,116 @@ export default function App() {
                               }}
                             >
                               {walkToBoardInfo && (
-                                <div>
-                                  🚶 Walk{' '}
-                                  <strong>
-                                    {
-                                      walkToBoardInfo.distanceMeters
-                                    }{' '}
-                                    m
-                                  </strong>{' '}
-                                  (
-                                  {
-                                    walkToBoardInfo.durationMins
-                                  }{' '}
-                                  min) to boarding stop
-                                </div>
+                                
+<div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+  {(opt.legs || []).length > 0 ? (
+    opt.legs.map((leg, index) => (
+      <div
+        key={index}
+        style={{
+          padding: '9px',
+          borderRadius: '8px',
+          background: leg.type === 'TRANSIT' ? '#ede9fe' : '#f8fafc',
+          border: `1px solid ${leg.type === 'TRANSIT' ? '#c4b5fd' : '#e2e8f0'}`,
+          fontSize: '0.74rem',
+          color: '#334155'
+        }}
+      >
+        {leg.type === 'TRANSIT' ? (
+          <>
+            <strong>🚌 Ride Bus {leg.routeNumber}</strong>
+            <div>{leg.routeName}</div>
+            <div>Board: {leg.fromStop}</div>
+            <div>Get off: {leg.toStop}</div>
+            <div>
+              {leg.departureTime} → {leg.arrivalTime}
+            </div>
+          </>
+        ) : (
+          <>
+            <strong>
+              🚶 {index === 0
+                ? 'Walk to boarding stop'
+                : index === opt.legs.length - 1
+                  ? 'Walk to destination'
+                  : 'Walk to transfer stop'}
+            </strong>
+            <div>{leg.from} → {leg.to}</div>
+            <div>
+              {leg.duration} min
+              {leg.dist != null ? ` · ${Math.round(leg.dist)} m` : ''}
+            </div>
+          </>
+        )}
+      </div>
+    ))
+  ) : (
+    <>
+      <div
+        style={{
+          padding: '9px',
+          borderRadius: '8px',
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
+          fontSize: '0.74rem'
+        }}
+      >
+        <strong>🚶 Walk to boarding stop</strong>
+        <div>
+          {origin.label} → {opt.allRouteStops?.[0]?.name || 'Boarding stop'}
+        </div>
+        {walkToBoardInfo && (
+          <div>
+            {walkToBoardInfo.durationMins} min · {walkToBoardInfo.distanceMeters} m
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          padding: '9px',
+          borderRadius: '8px',
+          background: '#ede9fe',
+          border: '1px solid #c4b5fd',
+          fontSize: '0.74rem'
+        }}
+      >
+        <strong>🚌 Ride Bus {opt.primaryRouteNumber}</strong>
+        <div>{opt.primaryRouteName}</div>
+        <div>
+          Board: {opt.allRouteStops?.[0]?.name || 'Boarding stop'}
+        </div>
+        <div>
+          Get off: {opt.allRouteStops?.[opt.allRouteStops.length - 1]?.name || 'Alighting stop'}
+        </div>
+        {opt.nextDepartureStr && (
+          <div>Departure: {opt.nextDepartureStr}</div>
+        )}
+      </div>
+
+      <div
+        style={{
+          padding: '9px',
+          borderRadius: '8px',
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
+          fontSize: '0.74rem'
+        }}
+      >
+        <strong>🚶 Walk to destination</strong>
+        <div>
+          {opt.allRouteStops?.[opt.allRouteStops.length - 1]?.name || 'Alighting stop'} → {destination.label}
+        </div>
+        {walkToDestInfo && (
+          <div>
+            {walkToDestInfo.durationMins} min · {walkToDestInfo.distanceMeters} m
+          </div>
+        )}
+      </div>
+    </>
+  )}
+</div>
+
                               )}
 
                               {walkToDestInfo && (

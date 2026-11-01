@@ -1444,6 +1444,17 @@ function runCSA({
       'No valid bus journey found.'
     );
 
+    console.log('THESIS CSA RESULT:', JSON.stringify({
+      departureTime: metrics.departureTime,
+      journeyDepartureTime: metrics.journeyDepartureTime,
+      arrivalTime: metrics.arrivalTime,
+      transfers: metrics.transfers,
+      routeSequence: metrics.routeSequence,
+      simulatedTravelTime: metrics.simulatedTravelTime,
+      walkingDistanceMeters: metrics.walkingDistanceMeters,
+      legs: option.legs
+    }, null, 2));
+
     return {
       options: [],
       metrics

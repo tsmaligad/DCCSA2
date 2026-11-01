@@ -39,7 +39,18 @@ function loadRoutesData() {
       const filePath = path.join(routesDir, file);
       const raw = fs.readFileSync(filePath, 'utf8');
       const data = JSON.parse(raw);
-
+  
+      const routeNumber = String(data.route_number || '').trim().toUpperCase();
+      const routeName = String(data.name || '').trim().toLowerCase();
+  
+      if (
+        routeNumber === 'Z999' ||
+        routeName.includes('demo route for beta testing')
+      ) {
+        console.log(`Skipping demo route: ${file}`);
+        return;
+      }
+  
       const rawPoints = data.points || data.waypoints || [];
 
       // Standardize path coordinates to { lat, lng } format

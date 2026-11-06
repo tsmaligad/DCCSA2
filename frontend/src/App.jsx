@@ -775,7 +775,7 @@ export default function App() {
           await planTripApi(
             origin,
             destination,
-            '00:00'
+            '06:00'
           );
 
         let options =

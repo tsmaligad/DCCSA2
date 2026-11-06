@@ -1,7 +1,7 @@
 const { performance } = require('perf_hooks');
 const { minsToTimeStr } = require('./routesLoader');
 
-const WALK_SPEED_METERS_PER_MINUTE = 45;
+const WALK_SPEED_METERS_PER_MINUTE = 50;
 
 const MAX_ACCESS_WALK_METERS = 1500;
 const MAX_TRANSFER_WALK_METERS = 500;
@@ -52,13 +52,8 @@ function calculateDistanceMeters(
 }
 
 function walkMinutes(distanceMeters) {
-  return Math.max(
-    1,
-    Math.ceil(
-      distanceMeters /
-      WALK_SPEED_METERS_PER_MINUTE
-    )
-  );
+  if (distanceMeters <= 5) return 0;
+  return Math.max(1, Math.ceil((distanceMeters / 100) * 2));
 }
 
 function timeStrToMinutes(value) {
